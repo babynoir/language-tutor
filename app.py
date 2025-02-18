@@ -1,144 +1,252 @@
+import streamlit as st
 import numpy as np
 import pandas as pd
 from scipy.stats import kstest, expon, norm
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_absolute_error
+import librosa
+import soundfile as sf
+import speech_recognition as sr
+from transformers import pipeline, AutoModelForSeq2SeqLM, AutoTokenizer
+from coqui_tts import TTS
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
 
-class CrashPredictor:
-    def __init__(self, data):
+# Função para adicionar estilos personalizados
+def add_custom_styles():
+    st.markdown(
         """
-        Inicializa o predictor com dados históricos de crash.
-        :param data: Lista de pontos de crash (floats)
-        """
-        self.data = np.array(data)
-        self.model = None
+        <style>
+            /* Estilo global */
+            body {
+                font-family: 'Arial', sans-serif;
+                background-color: #f8f9fa;
+                color: #343a40;
+            }
 
-    def analyze_distribution(self):
-        """
-        Analisa a distribuição dos dados históricos.
-        """
-        print("Análise de Distribuição:")
-        
-        # Teste de Kolmogorov-Smirnov para verificar se os dados seguem uma distribuição exponencial
-        exp_lambda = 1 / np.mean(self.data)  # Parâmetro lambda para distribuição exponencial
-        ks_stat, p_value = kstest(self.data, 'expon', args=(0, exp_lambda))
-        print(f"Distribuição Exponencial (λ={exp_lambda:.2f}): KS Statistic={ks_stat:.4f}, P-value={p_value:.4f}")
+            /* Estilo da barra lateral */
+            .stSidebar {
+                background-color: #ffffff;
+                border-radius: 15px;
+                box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            }
 
-        # Teste para distribuição normal
-        ks_stat, p_value = kstest(self.data, 'norm', args=(np.mean(self.data), np.std(self.data)))
-        print(f"Distribuição Normal: KS Statistic={ks_stat:.4f}, P-value={p_value:.4f}")
+            /* Estilo dos botões */
+            .stButton button {
+                background-color: #007bff !important;
+                color: white !important;
+                border-radius: 10px !important;
+                border: none !important;
+                padding: 10px 20px !important;
+                font-size: 16px !important;
+                transition: background-color 0.3s ease !important;
+            }
+            .stButton button:hover {
+                background-color: #0056b3 !important;
+            }
 
-        if p_value > 0.05:
-            print("Os dados podem seguir essa distribuição.")
-        else:
-            print("Os dados não seguem essa distribuição.")
+            /* Estilo das caixas de texto */
+            .stTextInput input {
+                border-radius: 10px !important;
+                border: 1px solid #ced4da !important;
+                padding: 10px !important;
+                font-size: 16px !important;
+            }
 
-    def detect_patterns(self):
-        """
-        Detecta padrões simples nos dados históricos.
-        """
-        print("\nDetecção de Padrões:")
-        diffs = np.diff(self.data)
-        avg_diff = np.mean(diffs)
-        std_diff = np.std(diffs)
+            /* Estilo das mensagens de sucesso */
+            .stSuccess {
+                border-radius: 10px !important;
+                background-color: #d4edda !important;
+                color: #155724 !important;
+                padding: 15px !important;
+                margin-bottom: 15px !important;
+            }
 
-        print(f"Média das diferenças entre crashes: {avg_diff:.2f}")
-        print(f"Desvio padrão das diferenças: {std_diff:.2f}")
+            /* Estilo das mensagens de erro */
+            .stError {
+                border-radius: 10px !important;
+                background-color: #f8d7da !important;
+                color: #721c24 !important;
+                padding: 15px !important;
+                margin-bottom: 15px !important;
+            }
 
-        if abs(avg_diff) < 0.1 * np.mean(self.data):
-            print("Possível padrão: Diferenças pequenas entre crashes consecutivos.")
-        else:
-            print("Nenhum padrão óbvio detectado nas diferenças.")
+            /* Estilo da página principal */
+            .main {
+                max-width: 1200px !important;
+                margin: 0 auto !important;
+                padding: 20px !important;
+                background-color: #ffffff !important;
+                border-radius: 15px !important;
+                box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1) !important;
+            }
 
-    def train_model(self):
-        """
-        Treina um modelo de regressão para prever o próximo crash.
-        """
-        print("\nTreinando Modelo de Previsão...")
-        X = np.arange(len(self.data)).reshape(-1, 1)  # Índices como features
-        y = self.data  # Pontos de crash como target
+            /* Estilo dos títulos */
+            h1, h2, h3 {
+                color: #0056b3 !important;
+                text-align: center !important;
+                margin-bottom: 20px !important;
+            }
 
-        # Dividir dados em treino e teste
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+            /* Estilo das tabelas */
+            table {
+                border-radius: 10px !important;
+                overflow: hidden !important;
+                border: 1px solid #ced4da !important;
+            }
 
-        # Treinar modelo Random Forest
-        self.model = RandomForestRegressor(n_estimators=100, random_state=42)
-        self.model.fit(X_train, y_train)
+            /* Estilo das badges */
+            .badge {
+                border-radius: 20px !important;
+                padding: 5px 10px !important;
+                font-size: 14px !important;
+                margin: 5px !important;
+            }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
-        # Avaliar o modelo
-        predictions = self.model.predict(X_test)
-        mae = mean_absolute_error(y_test, predictions)
-        print(f"Erro Médio Absoluto no conjunto de teste: {mae:.2f}")
+# Configurações iniciais
+st.set_page_config(page_title="Tutor de Idiomas AI", page_icon="🌍", layout="centered")
 
-    def predict_next_crash(self):
-        """
-        Faz uma previsão para o próximo crash.
-        """
-        if self.model is None:
-            raise ValueError("Modelo não treinado. Chame train_model() primeiro.")
+# Adicionar estilos personalizados
+add_custom_styles()
 
-        next_index = len(self.data)
-        prediction = self.model.predict([[next_index]])[0]
-        print(f"\nPrevisão para o próximo crash: {prediction:.2f}")
-        return prediction
+# Dicionário de idiomas
+LANGUAGES = {"Inglês": "en", "Espanhol": "es", "Francês": "fr"}
 
-    def simulate_strategy(self, stop_loss=2.0, take_profit=1.5):
-        """
-        Simula uma estratégia de apostas com base nas previsões.
-        :param stop_loss: Limite de perda antes de sair.
-        :param take_profit: Limite de lucro antes de sair.
-        """
-        print("\nSimulação de Estratégia:")
-        balance = 100.0  # Saldo inicial
-        history = []
+# Inicialização do estado da sessão para gamificação
+if "score" not in st.session_state:
+    st.session_state.score = 0
+    st.session_state.badges = []
 
-        for i in range(len(self.data)):
-            current_crash = self.data[i]
-            predicted_crash = self.predict_next_crash()
+# Carregar modelos apenas uma vez
+@st.cache_resource
+def load_models():
+    try:
+        translator = AutoModelForSeq2SeqLM.from_pretrained("Helsinki-NLP/opus-mt-tc-big-en-es-fr")
+        tokenizer = AutoTokenizer.from_pretrained("Helsinki-NLP/opus-mt-tc-big-en-es-fr")
+        grammar_corrector = pipeline("text2text-generation", model="pszemraj/flan-t5-base-grammar-synthesis")
+        tts = TTS(model_name="tts_models/multilingual/multi-dataset/your_tts")
+        return translator, tokenizer, grammar_corrector, tts
+    except Exception as e:
+        st.error(f"Falha ao carregar modelos: {e}")
+        return None, None, None, None
 
-            # Decisão de quando sair
-            if predicted_crash >= take_profit:
-                outcome = min(current_crash, take_profit)  # Sair no take_profit
-                profit = outcome - 1  # Lucro líquido
+# Função para analisar a pronúncia
+def analyze_pronunciation(audio_path):
+    try:
+        y, sr = librosa.load(audio_path)
+        pitches = librosa.yin(y, fmin=80, fmax=400, sr=sr)
+        return f"Tom médio: {np.mean(pitches):.2f} Hz"
+    except Exception as e:
+        return f"Erro ao analisar pronúncia: {e}"
+
+# Interface principal
+st.title("🌟 Tutor de Idiomas AI 🌟")
+language = st.selectbox("Escolha o idioma:", list(LANGUAGES.keys()), index=0)
+
+audio_file = st.file_uploader("Grave um áudio (formato WAV):", type=["wav"])
+
+# Processamento do áudio
+if audio_file and st.button("🚀 Analisar 🚀"):
+    with open("temp.wav", "wb") as f:
+        f.write(audio_file.getbuffer())
+
+    # Reconhecimento de Fala
+    r = sr.Recognizer()
+    with sr.AudioFile("temp.wav") as source:
+        audio = r.record(source)
+        try:
+            text = r.recognize_google(audio, language=LANGUAGES[language])
+        except sr.UnknownValueError:
+            text = ""
+        except sr.RequestError:
+            st.error("Não foi possível conectar ao serviço de reconhecimento de fala.")
+            text = ""
+
+    if text:
+        # Tradução e correção gramatical
+        translator, tokenizer, corrector, tts = load_models()
+        if translator and tokenizer and corrector and tts:
+            inputs = tokenizer(text, return_tensors="pt")
+            translated = translator.generate(**inputs)
+            translated_text = tokenizer.decode(translated[0], skip_special_tokens=True)
+            corrected_text = corrector(text=[translated_text])[0]['generated_text']
+
+            # Feedback
+            st.subheader("Feedback:")
+            st.write(f"**Você disse:** {text}")
+            st.write(f"**Correção:** {corrected_text}")
+            st.write(f"**Análise de Pronúncia:** {analyze_pronunciation('temp.wav')}")
+
+            # Gamificação
+            if translated_text.lower() == corrected_text.lower():
+                st.session_state.score += 10
+                if st.session_state.score >= 50:
+                    st.session_state.badges.append("🏅 Iniciante")
+                st.balloons()
             else:
-                outcome = 0  # Perde tudo se o crash ocorrer antes do take_profit
-                profit = -1  # Perda total
+                st.session_state.score = max(0, st.session_state.score - 5)
 
-            balance += profit
-            history.append((current_crash, predicted_crash, profit, balance))
+            st.success(f"Pontuação: {st.session_state.score}")
+            st.write("Conquistas:", " ".join([f'<span class="badge" style="background-color:#28a745;">{badge}</span>' for badge in st.session_state.badges]), unsafe_allow_html=True)
 
-            print(f"Rodada {i+1}: Real={current_crash:.2f}, Previsto={predicted_crash:.2f}, Lucro={profit:.2f}, Saldo={balance:.2f}")
+            # Áudio da correção
+            try:
+                tts.tts_to_file(text=corrected_text, file_path="feedback.wav")
+                st.audio("feedback.wav")
+            except Exception as e:
+                st.error(f"Falha ao gerar áudio: {e}")
 
-        df = pd.DataFrame(history, columns=["Real", "Previsto", "Lucro", "Saldo"])
-        print("\nResumo da Simulação:")
-        print(df.tail())
+# Integração com Google Classroom
+if st.button("🔗 Conectar ao Google Classroom 🔗"):
+    try:
+        flow = InstalledAppFlow.from_client_secrets_file(
+            "client_secret.json",
+            scopes=["https://www.googleapis.com/auth/classroom.courses.readonly"]
+        )
+        creds = flow.run_local_server(port=0)
+        from googleapiclient.discovery import build
+        service = build('classroom', 'v1', credentials=creds)
+        courses = service.courses().list().execute().get('courses', [])
+        st.subheader("Cursos Conectados:")
+        for course in courses:
+            st.write(f"- {course['name']}")
+    except Exception as e:
+        st.error(f"Falha ao conectar ao Google Classroom: {e}")
 
-        print(f"\nSaldo Final: {balance:.2f}")
+# Recursos Premium (opcional)
+with st.expander("💎 Recursos Premium (US$ 7/mês) 💎"):
+    st.write("""
+    ```python
+    # DeepL API (Tradução Premium)
+    # import deepl
+    # translator = deepl.Translator("SUA_CHAVE_AQUI")  # $6.99/mês
+    ```
+    """)
 
-
-# Exemplo de uso
-if __name__ == "__main__":
-    # Dados históricos de crash (substitua pelos seus próprios dados)
-    historical_data = [
-        1.5, 2.3, 3.7, 1.8, 4.2, 2.9, 1.6, 5.1, 2.4, 3.0,
-        1.9, 2.7, 3.5, 1.7, 4.0, 2.8, 1.5, 5.3, 2.5, 3.1,
-        2.0, 2.6, 3.6, 1.8, 4.1, 2.9, 1.6, 5.2, 2.4, 3.0
-    ]
-
-    predictor = CrashPredictor(historical_data)
-
-    # Etapa 1: Analisar distribuição
-    predictor.analyze_distribution()
-
-    # Etapa 2: Detectar padrões
-    predictor.detect_patterns()
-
-    # Etapa 3: Treinar modelo de previsão
-    predictor.train_model()
-
-    # Etapa 4: Prever próximo crash
-    predictor.predict_next_crash()
-
-    # Etapa 5: Simular estratégia de apostas
-    predictor.simulate_strategy(stop_loss=2.0, take_profit=1.5)
+# Rodapé animado
+st.markdown(
+    """
+    <style>
+        .footer {
+            text-align: center;
+            font-size: 14px;
+            margin-top: 20px;
+            color: #6c757d;
+            animation: fadeIn 2s ease-in-out;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+    </style>
+    <div class="footer">
+        Powered by Streamlit & ❤️ | Desenvolvido por Você!
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
